@@ -1,13 +1,114 @@
 """
-ai_gm.py — Anthropic-powered GM: action parser + narrative generator + event creator
+ai_gm.py — Google Gemini-powered GM: action parser + narrative generator + event creator
 """
 
 import json
 import os
-from anthropic import AsyncAnthropic
 
-client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-MODEL = "claude-sonnet-4-20250514"
+import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def get_gemini_api_key() -> str | None:
+    """Return the Gemini API key from either supported env var name."""
+    return os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+
+
+API_KEY = get_gemini_api_key()
+if API_KEY:
+    genai.configure(api_key=API_KEY)
+else:
+    print("[AI] Warning: GOOGLE_API_KEY/GEMINI_API_KEY is not set. Gemini calls will fail until the key is configured.")
+
+MODEL = "gemini-2.5-flash"  # допустимое имя модели Gemini
+
+
+def list_available_models() -> list[str]:
+    """Return available Gemini model names for this account/key."""
+    try:
+        models = genai.list_models()
+        available = []
+        seen = set()
+        for model in models:
+            name = getattr(model, "name", None)
+            clean_name = name.replace("models/", "") if isinstance(name, str) else None
+            if clean_name and clean_name not in seen:
+                seen.add(clean_name)
+                available.append(clean_name)
+        return available
+    except Exception as e:
+        print(f"[AI Model List Error] {e}")
+        return ["gemini-3.0-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
+
+
+def extract_json_payload(raw_text: str):
+    """Extract and parse JSON from Gemini output, even when it contains markdown fences or trailing text."""
+    text = raw_text.strip()
+
+    if text.startswith("```"):
+        text = text.split("```", 1)[1]
+        if text.lower().startswith("json"):
+            text = text[4:]
+
+    text = text.strip().strip("`").strip()
+    if not text:
+        raise ValueError("Empty Gemini response")
+
+    try:
+        return json.JSONDecoder().raw_decode(text)[0]
+    except json.JSONDecodeError:
+        pass
+
+    first_brace = text.find("{")
+    first_bracket = text.find("[")
+    start = -1
+    if first_brace != -1 and (first_bracket == -1 or first_brace < first_bracket):
+        start = first_brace
+    elif first_bracket != -1:
+        start = first_bracket
+
+    if start == -1:
+        raise ValueError("No JSON object/array found in Gemini response")
+
+    stack = []
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+
+        if char in "[{":
+            stack.append(char)
+            continue
+
+        if char in "]}":
+            if not stack:
+                break
+            opener = stack[-1]
+            if (opener == "{" and char == "}") or (opener == "[" and char == "]"):
+                stack.pop()
+                if not stack:
+                    candidate = text[start:index + 1]
+                    return json.loads(candidate)
+            else:
+                break
+
+    raise ValueError("Could not recover valid JSON from Gemini response")
+
 
 # ── System prompts ─────────────────────────────────────────────────────────
 
@@ -72,19 +173,16 @@ async def parse_actions(player_text: str, faction: dict) -> list[dict]:
         f"Действие игрока: {player_text}"
     )
     try:
-        resp = await client.messages.create(
-            model=MODEL,
-            max_tokens=1000,
-            system=PARSER_SYSTEM,
-            messages=[{"role": "user", "content": context}]
+        model = genai.GenerativeModel(MODEL)
+        resp = model.generate_content(
+            [PARSER_SYSTEM, context],
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=1000,
+                temperature=0.7
+            )
         )
-        raw = resp.content[0].text.strip()
-        # Strip markdown code blocks if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        actions = json.loads(raw)
+        raw = resp.text.strip()
+        actions = extract_json_payload(raw)
         # Validate total units
         total = sum(a.get("units", 0) for a in actions)
         pop = faction.get("population", 50)
@@ -114,13 +212,15 @@ async def generate_narrative(faction: dict, action: dict,
         f"Напиши короткий атмосферный текст результата."
     )
     try:
-        resp = await client.messages.create(
-            model=MODEL,
-            max_tokens=300,
-            system=NARRATIVE_SYSTEM,
-            messages=[{"role": "user", "content": prompt}]
+        model = genai.GenerativeModel(MODEL)
+        resp = model.generate_content(
+            [NARRATIVE_SYSTEM, prompt],
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=300,
+                temperature=0.8
+            )
         )
-        return resp.content[0].text.strip()
+        return resp.text.strip()
     except Exception as e:
         print(f"[AI Narrative Error] {e}")
         return f"Действие завершено с исходом: {outcome}."
@@ -140,18 +240,16 @@ async def generate_global_event(factions: list[dict], season: str,
         f"Сгенерируй логичное глобальное событие."
     )
     try:
-        resp = await client.messages.create(
-            model=MODEL,
-            max_tokens=500,
-            system=EVENT_SYSTEM,
-            messages=[{"role": "user", "content": prompt}]
+        model = genai.GenerativeModel(MODEL)
+        resp = model.generate_content(
+            [EVENT_SYSTEM, prompt],
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=500,
+                temperature=0.7
+            )
         )
-        raw = resp.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        return json.loads(raw)
+        raw = resp.text.strip()
+        return extract_json_payload(raw)
     except Exception as e:
         print(f"[AI Event Error] {e}")
         return {
@@ -173,19 +271,18 @@ async def arbitrate(faction: dict, action_description: str,
         f'{{"valid": true/false, "reason": "почему", '
         f'"suggested_type": "GATHER/BUILD/etc", "difficulty_mod": -3..+3}}'
     )
+    arbitration_system = ("Ты — справедливый арбитр игры «Эпоха Осколков». "
+                          "Оцени логичность действия в контексте мира. Верни только JSON.")
     try:
-        resp = await client.messages.create(
-            model=MODEL,
-            max_tokens=300,
-            system="Ты — справедливый арбитр игры «Эпоха Осколков». "
-                   "Оцени логичность действия в контексте мира. Верни только JSON.",
-            messages=[{"role": "user", "content": prompt}]
+        model = genai.GenerativeModel(MODEL)
+        resp = model.generate_content(
+            [arbitration_system, prompt],
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=300,
+                temperature=0.6
+            )
         )
-        raw = resp.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        return json.loads(raw)
+        raw = resp.text.strip()
+        return extract_json_payload(raw)
     except Exception:
         return {"valid": True, "reason": "", "suggested_type": "OTHER", "difficulty_mod": 0}

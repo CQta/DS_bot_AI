@@ -23,7 +23,7 @@
 ### Требования
 - Python 3.10+
 - Discord Bot Token
-- Anthropic API Key
+- Google Gemini API Key (set either GOOGLE_API_KEY or GEMINI_API_KEY)
 
 ### Установка
 
@@ -54,7 +54,8 @@
 5. **Заполните `.env` файл:**
    ```env
    DISCORD_TOKEN=your_discord_bot_token_here
-   ANTHROPIC_API_KEY=your_anthropic_api_key_here
+   GOOGLE_API_KEY=your_google_gemini_api_key_here
+   # or GEMINI_API_KEY=your_google_gemini_api_key_here
    GM_ROLE_NAME=GM  # Роль для ГМ-ов (по умолчанию)
    ```
 

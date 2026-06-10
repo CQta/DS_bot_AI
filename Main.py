@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
+import ai_gm
 
 # Импорт наших собственных модулей
 import database as db
@@ -21,6 +22,9 @@ GM_ROLE = os.getenv("GM_ROLE_NAME", "GM")
 # Настройка интентов Discord
 intents = discord.Intents.default()
 intents.message_content = True
+
+print(ai_gm.list_available_models())
+
 
 class PangeaBot(commands.Bot):
     def __init__(self):
