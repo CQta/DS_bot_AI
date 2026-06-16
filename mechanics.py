@@ -2,6 +2,7 @@
 mechanics.py — Dice, outcome resolution, resource consumption, weather
 """
 
+import math
 import random
 import json
 from typing import Optional
@@ -65,6 +66,33 @@ def calc_modifier(faction: dict, action_type: str) -> int:
     return (stat_val - 5) // 2
 
 
+def calc_action_difficulty(action_type: str) -> int:
+    """Return a difficulty rating for the given action type."""
+    difficulty = {
+        "GATHER": 1,
+        "MINE": 2,
+        "BUILD": 3,
+        "RESEARCH": 3,
+        "MOVE": 1,
+        "ATTACK": 4,
+        "MIRACLE": 5,
+        "DIPLOMACY": 3,
+        "SPY": 4,
+        "TRADE": 2,
+        "OTHER": 2,
+    }
+    return difficulty.get(action_type.upper(), 2)
+
+
+def calc_unit_efficiency(units: int) -> float:
+    """Apply diminishing returns to large unit groups."""
+    if units <= 1:
+        return 1.0
+    # More units still help, but each дополнительный юнит даёт меньше эффекта.
+    efficiency = 1.0 - 0.25 * math.log1p(units - 1) / math.log1p(50)
+    return max(0.4, efficiency)
+
+
 # ── Resource calculation ──────────────────────────────────────────────────────
 
 def calc_resource_delta(action_type: str, outcome: str,
@@ -82,7 +110,8 @@ def calc_resource_delta(action_type: str, outcome: str,
         "CRITICAL_FAILURE": -0.1,
     }
     m = multipliers.get(outcome, 0.5)
-    base = units * 5  # base yield per unit
+    effective_units = max(1, int(units * calc_unit_efficiency(units)))
+    base = effective_units * 5  # base yield after diminishing returns
 
     delta = {}
 

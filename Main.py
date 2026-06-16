@@ -23,7 +23,6 @@ GM_ROLE = os.getenv("GM_ROLE_NAME", "GM")
 intents = discord.Intents.default()
 intents.message_content = True
 
-print(ai_gm.list_available_models())
 
 
 class PangeaBot(commands.Bot):
@@ -153,7 +152,7 @@ async def action(interaction: discord.Interaction, text: str):
     if not parsed_actions:
         await interaction.followup.send("❌ ИИ не смог распознать ваши действия. Попробуйте написать более конкретно.")
         return
-
+    print(parsed_actions)
     # Записываем действия в базу данных
     for act in parsed_actions:
         await db.execute(
@@ -203,10 +202,11 @@ async def turn_advance(interaction: discord.Interaction):
         if not faction:
             continue
             
-        # Считаем d20 + модификатор от характеристик
+        # Считаем d20 + модификатор от характеристик и учитываем сложность действия
+        difficulty = mechanics.calc_action_difficulty(act["action_type"])
         dice = mechanics.roll_d20()
         modifier = mechanics.calc_modifier(faction, act["action_type"])
-        final_roll = dice + modifier
+        final_roll = dice + modifier - difficulty
         
         # Градация успеха
         outcome = mechanics.get_outcome(final_roll)
@@ -220,7 +220,8 @@ async def turn_advance(interaction: discord.Interaction):
             
         # Генерация художественного описания от ИИ Клод
         narrative = await ai_gm.generate_narrative(
-            faction, act, outcome, delta, current_season, game["temperature"]
+            faction, act, outcome, delta, current_season, game["temperature"],
+            difficulty, dice, modifier
         )
         
         # Сохраняем результаты обратно в действие
