@@ -47,7 +47,7 @@ async def init_db():
             faith           INTEGER DEFAULT 10,
             will_points     INTEGER DEFAULT 3,
             -- Turn state
-            turn_submitted  INTEGER DEFAULT 0,
+            free_pop  INTEGER DEFAULT 50,
             created_at      REAL    DEFAULT (unixepoch())
         );
 
@@ -72,7 +72,6 @@ async def init_db():
             description     TEXT    NOT NULL,
             units_assigned  INTEGER DEFAULT 0,
             dice_roll       INTEGER DEFAULT 0,
-            modifier        INTEGER DEFAULT 0,
             final_roll      INTEGER DEFAULT 0,
             outcome         TEXT    DEFAULT '',
             result_text     TEXT    DEFAULT '',
@@ -82,14 +81,13 @@ async def init_db():
             submitted_at    REAL    DEFAULT (unixepoch())
         );
 
-        -- Achievements
-        CREATE TABLE IF NOT EXISTS achievements (
+        -- Bonuses
+        CREATE TABLE IF NOT EXISTS bonuses (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             faction_id  INTEGER REFERENCES factions(id),
-            name        TEXT    NOT NULL,
-            description TEXT    NOT NULL,
-            bonus_json  TEXT    DEFAULT '{}',
-            earned_at   REAL    DEFAULT (unixepoch())
+            bonus_type  TEXT    DEFAULT '{}',
+            bonus_value REAL    DEFAULT (unixepoch()),
+            is_active   INTEGER DEFAULT 0
         );
 
         -- Technologies
@@ -99,9 +97,23 @@ async def init_db():
             tier        INTEGER DEFAULT 1,
             name        TEXT    NOT NULL,
             is_researched INTEGER DEFAULT 0,
-            progress    INTEGER DEFAULT 0
+            research_cost    INTEGER DEFAULT 0,
+            research_progress    INTEGER DEFAULT 0,
+            bonus_id INTEGER REFERENCES bonuses(id)
         );
-
+        
+        -- Buildings
+        CREATE TABLE IF NOT EXISTS buildings (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            faction_id  INTEGER REFERENCES factions(id),
+            tier        INTEGER DEFAULT 1,
+            name        TEXT    NOT NULL,
+            is_builded INTEGER DEFAULT 0,
+            build_cost    INTEGER DEFAULT 0,
+            build_progress    INTEGER DEFAULT 0,
+            bonus_id INTEGER REFERENCES bonuses(id)
+        );
+        
         -- Turn history log
         CREATE TABLE IF NOT EXISTS turn_log (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,23 +125,114 @@ async def init_db():
             created_at  REAL    DEFAULT (unixepoch())
         );
 
-        -- Diplomacy
-        CREATE TABLE IF NOT EXISTS diplomacy (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            faction_a   INTEGER REFERENCES factions(id),
-            faction_b   INTEGER REFERENCES factions(id),
-            status      TEXT    DEFAULT 'NEUTRAL',  -- NEUTRAL/ALLIANCE/WAR
-            updated_at  REAL    DEFAULT (unixepoch()),
-            UNIQUE(faction_a, faction_b)
-        );
-
         -- Insert default game row
         INSERT OR IGNORE INTO game (id) VALUES (1);
         """)
         await db.commit()
     print("[DB] Database initialized.")
 
+# ── Technologies helper ──────────────────────────────────────────────────────────
 
+async def get_technologies(faction_id: int) -> list[dict]:
+    return await fetch_all(
+        "SELECT * FROM technologies WHERE faction_id = ?",
+        (faction_id,)
+    )
+
+async def get_technology_by_id(faction_id: int, tech_id: int) -> Optional[dict]:
+    return await fetch_one(
+        "SELECT * FROM technologies WHERE faction_id = ? AND id = ?",
+        (faction_id, tech_id)
+    )
+    
+async def get_not_researched_technologies(faction_id: int) -> dict[str, int]:
+    result = await fetch_all(
+        "SELECT id, name FROM technologies WHERE faction_id = ? AND is_researched = 0",
+        (faction_id,)
+    )
+    return {item["name"]: item["id"] for item in result}
+
+async def mark_technology_as_researched(faction_id: int, tech_id: int):
+    await execute(
+        "UPDATE technologies SET is_researched = 1 WHERE faction_id = ? AND id = ?",
+        (faction_id, tech_id)
+    )
+    
+async def update_technology_progress(faction_id: int, tech_id: int, progress_delta: int):
+    await execute(
+        "UPDATE technologies SET progress = progress + ? "
+        "WHERE faction_id = ? AND id = ?",
+        (progress_delta, faction_id, tech_id)
+    )
+    
+async def create_technology(faction_id: int, name: str, tier: int, research_cost: int, research_progress: int, is_researched: int = 0):
+    await execute(
+        "INSERT INTO technologies (faction_id, name, tier, research_cost, research_progress, is_researched) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (faction_id, name, tier, research_cost, research_progress, is_researched)
+    )
+
+    
+
+# ── Building helper ──────────────────────────────────────────────────────────
+
+async def get_buildings(faction_id: int) -> list[dict]:
+    return await fetch_all(
+        "SELECT * FROM buildings WHERE faction_id = ?",
+        (faction_id,)
+    )
+
+async def get_not_built_buildings(faction_id: int) -> dict[str, int]:
+    result = await fetch_all(
+        "SELECT id, name FROM buildings WHERE faction_id = ? AND is_builded = 0",
+        (faction_id,)
+    )
+    return {item["name"]: item["id"] for item in result}
+
+async def update_building_progress(faction_id: int, building_id: int, progress_delta: int):
+    await execute(
+        "UPDATE buildings SET progress = progress + ? "
+        "WHERE faction_id = ? AND id = ?",
+        (progress_delta, faction_id, building_id)
+    )
+
+async def create_building(faction_id: int, name: str, tier: int, build_cost: int):
+    await execute(
+        "INSERT INTO buildings (faction_id, name, tier, build_cost) "
+        "VALUES (?, ?, ?, ?)",
+        (faction_id, name, tier, build_cost)
+    )
+async def get_building_by_id(faction_id: int, building_id: int) -> Optional[dict]:
+    return await fetch_one(
+        "SELECT * FROM buildings WHERE faction_id = ? AND id = ?",
+        (faction_id, building_id)
+    )
+async def mark_building_as_built(faction_id: int, building_id: int):
+    await execute(
+        "UPDATE buildings SET is_builded = 1 WHERE faction_id = ? AND id = ?",
+        (faction_id, building_id)
+    )
+    
+# ── Bonuses helper ──────────────────────────────────────────────────────────
+
+async def get_all_active_bonuses(faction_id: int) -> list[dict]:
+    return await fetch_all(
+        "SELECT * FROM bonuses WHERE faction_id = ? AND is_active = 1",
+        (faction_id,)
+    )
+    
+async def get_all_unactive_bonuses(faction_id: int) -> list[dict]:
+    return await fetch_all(
+        "SELECT * FROM bonuses WHERE faction_id = ? AND is_active = 0",
+        (faction_id,)
+    )
+
+async def activate_bonus(faction_id: int, bonus_id: int):
+    await execute(
+        "UPDATE bonuses SET is_active = 1 WHERE faction_id = ? AND id = ?",
+        (faction_id, bonus_id)
+    )
+    
 # ── Generic helpers ──────────────────────────────────────────────────────────
 
 async def fetch_one(query: str, params=()) -> Optional[dict]:
@@ -223,7 +326,7 @@ async def update_faction_field(faction_id: int, field: str, value):
     allowed = {
         'faith', 'will_points', 'population', 'pop_cap',
         'stat_body', 'stat_mind', 'stat_energy', 'stat_concentration',
-        'turn_submitted'
+        'free_pop'
     }
     if field not in allowed:
         return
@@ -234,7 +337,7 @@ async def update_faction_field(faction_id: int, field: str, value):
 
 
 async def reset_turn_flags():
-    await execute("UPDATE factions SET turn_submitted = 0")
+    await execute("UPDATE factions SET free_pop = population")
 
 
 async def log_event(turn_number: int, faction_id: Optional[int],

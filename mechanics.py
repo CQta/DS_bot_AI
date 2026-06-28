@@ -2,10 +2,11 @@
 mechanics.py — Dice, outcome resolution, resource consumption, weather
 """
 
+import math
 import random
 import json
 from typing import Optional
-
+import database
 # ── Dice ─────────────────────────────────────────────────────────────────────
 
 def roll_d20() -> int:
@@ -13,18 +14,15 @@ def roll_d20() -> int:
 
 
 def get_outcome(final_roll: int) -> str:
-    if final_roll == 1:
-        return "CRITICAL_FAILURE"
-    elif final_roll <= 5:
+    if final_roll <= 5:
         return "FAILURE"
     elif final_roll <= 10:
         return "PARTIAL_FAILURE"
     elif final_roll <= 15:
         return "PARTIAL_SUCCESS"
-    elif final_roll <= 19:
-        return "SUCCESS"
     else:
-        return "CRITICAL_SUCCESS"
+        return "SUCCESS"
+    
 
 
 OUTCOME_LABELS = {
@@ -55,7 +53,6 @@ def calc_modifier(faction: dict, action_type: str) -> int:
         "MOVE":     "stat_body",
         "ATTACK":   "stat_body",
         "MIRACLE":  "stat_energy",
-        "DIPLOMACY":"stat_concentration",
         "SPY":      "stat_concentration",
         "TRADE":    "stat_mind",
     }
@@ -63,6 +60,32 @@ def calc_modifier(faction: dict, action_type: str) -> int:
     stat_val = faction.get(stat_key, 5)
     # Modifier: (stat - 5) / 2, rounded down — similar to D&D feel
     return (stat_val - 5) // 2
+
+
+def calc_action_difficulty(action_type: str) -> int:
+    """Return a difficulty rating for the given action type."""
+    difficulty = {
+        "GATHER": 1,
+        "MINE": 2,
+        "BUILD": 3,
+        "RESEARCH": 3,
+        "MOVE": 1,
+        "ATTACK": 4,
+        "MIRACLE": 5,
+        "SPY": 4,
+        "TRADE": 2,
+        "OTHER": 2,
+    }
+    return difficulty.get(action_type.upper(), 2)
+
+
+def calc_unit_efficiency(units: int) -> float:
+    """Apply diminishing returns to large unit groups."""
+    if units <= 1:
+        return 1.0
+    # More units still help, but each дополнительный юнит даёт меньше эффекта.
+    efficiency = 1.0 - 0.25 * math.log1p(units - 1) / math.log1p(50)
+    return max(0.4, efficiency)
 
 
 # ── Resource calculation ──────────────────────────────────────────────────────
@@ -82,7 +105,8 @@ def calc_resource_delta(action_type: str, outcome: str,
         "CRITICAL_FAILURE": -0.1,
     }
     m = multipliers.get(outcome, 0.5)
-    base = units * 5  # base yield per unit
+    effective_units = max(1, int(units * calc_unit_efficiency(units)))
+    base = effective_units * 5  # base yield after diminishing returns
 
     delta = {}
 
@@ -99,22 +123,14 @@ def calc_resource_delta(action_type: str, outcome: str,
         # Building costs resources
         delta["wood"] = -int(units * 3)
         delta["stone"] = -int(units * 2)
+        delta["build_progress"] = int(units *  m)
 
     elif action_type == "RESEARCH":
         # No direct resource gain; handled by tech progress
-        delta["faith"] = int(units * m * 0.5)
+        delta["research_progress"] = int(units *  m)
 
     elif action_type == "MIRACLE":
         delta["faith"] = -faction.get("miracle_cost", 20)
-
-    elif action_type == "ATTACK":
-        if m > 0:
-            delta["food"] = int(base * m * 0.3)  # loot
-        else:
-            delta["food"] = -int(units * 2)  # losses cost food
-
-    elif action_type == "TRADE":
-        delta["food"] = int(base * m * 0.5)
 
     # Remove zero values
     return {k: v for k, v in delta.items() if v != 0}

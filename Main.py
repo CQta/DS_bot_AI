@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
+import ai_gm
 
 # Импорт наших собственных модулей
 import database as db
@@ -21,6 +22,8 @@ GM_ROLE = os.getenv("GM_ROLE_NAME", "GM")
 # Настройка интентов Discord
 intents = discord.Intents.default()
 intents.message_content = True
+
+
 
 class PangeaBot(commands.Bot):
     def __init__(self):
@@ -72,7 +75,6 @@ def is_gm():
     path=[
         app_commands.Choice(name="🌿 Культивация (CULTIVATION)", value="CULTIVATION"),
         app_commands.Choice(name="✨ Магия (MAGIC)", value="MAGIC"),
-        app_commands.Choice(name="🕊️ Святость (HOLY)", value="HOLY"),
         app_commands.Choice(name="⚙️ Технологии (TECHNOLOGY)", value="TECHNOLOGY"),
     ],
     alignment=[
@@ -127,8 +129,17 @@ async def status(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="action", description="Отправить действия на текущий ход (свободный текст)")
-@app_commands.describe(text="Опишите, что делают ваши подданные в этот ход")
-async def action(interaction: discord.Interaction, text: str):
+@app_commands.describe(units="Сколько юнитов выделенно на задачу",text="Опишите, что делают ваши подданные в этот ход")
+@app_commands.choices(
+    action_type=[
+        app_commands.Choice(name="🏗️ BUILD — строить здания", value="BUILD"),
+        app_commands.Choice(name="🌿 GATHER — собирать ресурсы", value="GATHER"),
+        app_commands.Choice(name="🔬 RESEARCH — исследовать технологии", value="RESEARCH"),
+        app_commands.Choice(name="✨ MIRACLE — использовать чудо бога", value="MIRACLE"),
+        app_commands.Choice(name="  OTHER — прочие действия", value="OTHER"),
+    ]
+)
+async def action(interaction: discord.Interaction, units: int, action_type: str, text: str):
     await interaction.response.defer(ephemeral=True)
     
     faction = await db.get_faction(str(interaction.user.id))
@@ -136,39 +147,28 @@ async def action(interaction: discord.Interaction, text: str):
         await interaction.followup.send("❌ Сначала зарегистрируйте фракцию через `/register`.")
         return
         
-    if faction.get("turn_submitted"):
-        await interaction.followup.send("❌ Вы уже завершили ход! Дождитесь итогов.")
+    print(faction)
+    if faction.get("free_pop", 0) < units:
+        await interaction.followup.send("❌ У вас недостаточно юнитов для этого действия!")
         return
 
     game = await db.get_game()
     current_turn = game["turn_number"]
 
-    # ИИ разбирает свободный текст на структуру JSON
-    parsed_actions = await ai_gm.parse_actions(text, faction)
     
-    if not parsed_actions:
-        await interaction.followup.send("❌ ИИ не смог распознать ваши действия. Попробуйте написать более конкретно.")
-        return
 
     # Записываем действия в базу данных
-    for act in parsed_actions:
-        await db.execute(
-            """INSERT INTO turn_actions 
-               (faction_id, turn_number, action_type, description, units_assigned, is_secret)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (faction["id"], current_turn, act["action_type"], act["description"], act["units"], 1 if act.get("is_secret") else 0)
-        )
+    await db.execute(
+        """INSERT INTO turn_actions 
+            (faction_id, turn_number, action_type, description, units_assigned)
+            VALUES (?, ?, ?, ?, ?)""",
+        (faction["id"], current_turn, action_type, text, units)
+    )
 
     # Ставим отметку, что ход сдан
-    await db.update_faction_field(faction["id"], "turn_submitted", 1)
+    await db.update_faction_field(faction["id"], "free_pop", faction["free_pop"] - units)
     
-    # Формируем красивый отчет для игрока о том, что понял ИИ
-    report_lines = []
-    for a in parsed_actions:
-        report_lines.append(f"• **[{a['action_type']}]** (Юниты: {a['units']}): {a['description']}")
-    
-    response_text = "✅ **Ваши действия приняты и поставлены в очередь:**\n" + "\n".join(report_lines)
-    await interaction.followup.send(response_text)
+    await interaction.followup.send("✅ **Ваши действие принято и поставлены в очередь:**")
 
 
 # ─── АДМИНИСТРАТИВНЫЕ КОМАНДЫ ГЕЙМ-МАСТЕРА (GM) ──────────────────────────────
@@ -195,37 +195,114 @@ async def turn_advance(interaction: discord.Interaction):
     # 2. Обработка каждого действия (Броски + Модификаторы + Расчет ресурсов + Нарратив ИИ)
     for act in actions:
         faction_id = act["faction_id"]
+        text: str = act.get("description") # type: ignore
         faction = await db.get_faction_by_id(faction_id)
         if not faction:
             continue
             
-        # Считаем d20 + модификатор от характеристик
+        # Считаем d20 + модификатор от характеристик и учитываем сложность действия
+        #difficulty = mechanics.calc_action_difficulty(act["action_type"])
         dice = mechanics.roll_d20()
-        modifier = mechanics.calc_modifier(faction, act["action_type"])
-        final_roll = dice + modifier
+        if dice == 1:
+            # Критический провал
+            outcome = "CRITICAL_FAILURE"
+            final_roll = 1
+        elif dice == 20:
+            # Критический успех
+            outcome = "CRITICAL_SUCCESS"
+            final_roll = 20
+        else:
+            modifier = mechanics.calc_modifier(faction, act["action_type"])
+            final_roll = dice + modifier
+            outcome = mechanics.get_outcome(final_roll)
         
-        # Градация успеха
-        outcome = mechanics.get_outcome(final_roll)
         
         # Изменение ресурсов по математике игры
         delta = mechanics.calc_resource_delta(act["action_type"], outcome, act["units_assigned"], faction)
         
-        # Применяем изменения в БД
-        for resource, amount in delta.items():
-            await db.update_resource(faction_id, resource, amount)
+        if act.get("action_type") == "BUILD":
+            # Проверяем, есть ли у фракции незавершенные здания
+            not_built = await db.get_not_built_buildings(faction_id)
+            res = [element for element in not_built.keys() if element in text]
+            if res:
+                
+                # Берем первое незавершенное здание
+                building_id = not_built.get(res[0], 0)
+                
+                # Увеличиваем прогресс строительства
+                await db.update_building_progress(faction_id, building_id, delta.get("build_progress", 0))
+                updated_building = await db.get_building_by_id(faction_id, building_id)
+                
+                if updated_building and updated_building.get("build_progress", 0) >= updated_building.get("build_cost"):
+                    await db.mark_building_as_built(faction_id, building_id)
+                    await db.activate_bonus(faction_id, updated_building.get("bonus_id", 0))
+                    narrative = f"Мне лень что то придумывать и тратить на вас промпты, поэтому я просто напишу что вы построили здание {res[0]}. Поздравляю!"
             
-        # Генерация художественного описания от ИИ Клод
-        narrative = await ai_gm.generate_narrative(
-            faction, act, outcome, delta, current_season, game["temperature"]
-        )
+            #Если игрок строит что то новое, запрос в ии
+            else:
+                narrative = await ai_gm.generate_narrative(faction, act, outcome, delta, current_season, game["temperature"], dice)
+                if narrative:
+                    
+                    if narrative.get("build_cost") == -1:
+                        
+                        await db.create_technology(faction_id, narrative.get("title", "Неизвестная технология"),
+                                               narrative.get("tear", -1),  narrative.get("build_cost", 999), 
+                                               delta.get("work_progress", 0), 1)
+                    else:
+                        
+                        await db.create_technology(faction_id, narrative.get("title", "Неизвестная технология"),
+                                               narrative.get("tear", -1),  narrative.get("build_cost", 999), 
+                                               delta.get("work_progress", 0), 0)
+                
+        elif act.get("action_type") == "RESEARCH":
+            
+            not_resurched = await db.get_not_researched_technologies(faction_id)
+            res = [element for element in not_resurched.keys() if element in text]
+            if res:
+            
+                # Берем первое незавершенное иследование
+                tech_id = not_resurched.get(res[0], 0)
+                
+                # Увеличиваем прогресс строительства
+                await db.update_technology_progress(faction_id, tech_id, delta.get("research_progress", 0))
+                updated_tech = await db.get_technology_by_id(faction_id, tech_id)
+                
+                if updated_tech and updated_tech.get("research_progress", 0) >= updated_tech.get("research_cost"):
+                    await db.mark_technology_as_researched(faction_id, tech_id)
+                    await db.activate_bonus(faction_id, updated_tech.get("bonus_id", 0))
+                    narrative = f"Мне лень что то придумывать и тратить на вас промпты, поэтому я просто напишу что вы исследовали технологию {res[0]}. Поздравляю!"
+            
+            #Если игрок изучает что то новое, запрос в ии
+            else:
+                narrative = await ai_gm.generate_narrative(faction, act, outcome, delta, current_season, game["temperature"], dice)
+                if narrative:
+                    
+                    if narrative.get("science_cost") == -1:
+                        
+                        await db.create_technology(faction_id, narrative.get("title", "Неизвестная технология"),
+                                               narrative.get("tear", -1),  narrative.get("science_cost", 999), 
+                                               delta.get("research_progress", 0), 1)
+                    else:
+                        
+                        await db.create_technology(faction_id, narrative.get("title", "Неизвестная технология"),
+                                               narrative.get("tear", -1),  narrative.get("science_cost", 999), 
+                                               delta.get("research_progress", 0), 0)
+                
+        else:
+            # Применяем изменения в БД
+            for resource, amount in delta.items():
+                if resource in ["food", "fuel", "wood", "stone", "metal", "faith"]:
+                    await db.update_resource(faction_id, resource, amount)
+            # Генерация художественного описания от ИИ
+            narrative = await ai_gm.generate_narrative(faction, act, outcome, delta, current_season, game["temperature"], dice)
         
         # Сохраняем результаты обратно в действие
         await db.execute(
             """UPDATE turn_actions SET 
-               dice_roll = ?, modifier = ?, final_roll = ?, outcome = ?, 
+               dice_roll = ?, final_roll = ?, outcome = ?, 
                result_text = ?, resource_delta = ?, processed = 1
                WHERE id = ?""",
-            (dice, modifier, final_roll, outcome, narrative, json.dumps(delta), act["id"])
+            (dice, final_roll, outcome, narrative, json.dumps(delta), act["id"])
         )
         
         # Логируем в историю мира публичные действия
@@ -236,7 +313,7 @@ async def turn_advance(interaction: discord.Interaction):
             )
             
             # Отправляем красивый эмбед в канал, где была вызвана команда
-            embed_res = embeds.embed_action_result(faction, act, outcome, narrative, delta, dice, modifier)
+            embed_res = embeds.embed_action_result(faction, act, outcome, narrative, delta, dice)
             await interaction.channel.send(embed=embed_res)
 
     # 3. Фаза потребления ресурсов в конце хода (Еда, Топливо) и проверка голода
