@@ -64,14 +64,14 @@ def embed_status(faction: dict) -> discord.Embed:
         inline=True
     )
 
-    submitted = "✅ Сдан" if faction.get("turn_submitted") else "⏳ Ожидается"
+    submitted = "✅ Сдан" if faction.get("free_pop", 0) > 0 else "⏳ Ожидается"
     e.set_footer(text=f"Ход: {submitted}")
     return e
 
 
 def embed_action_result(faction: dict, action: dict, outcome: str,
                         narrative: str, delta: dict,
-                        dice: int, modifier: int) -> discord.Embed:
+                        dice: int) -> discord.Embed:
     color = OUTCOME_COLORS.get(outcome, 0x888888)
     label = OUTCOME_LABELS.get(outcome, outcome)
 
@@ -81,12 +81,6 @@ def embed_action_result(faction: dict, action: dict, outcome: str,
         color=color
     )
 
-    sign = "+" if modifier >= 0 else ""
-    e.add_field(
-        name="🎲 Бросок",
-        value=f"`d20({dice}) {sign}{modifier} = {dice + modifier}`",
-        inline=True
-    )
     e.add_field(
         name="👥 Юнитов",
         value=f"`{action.get('units', 0)}`",
@@ -152,7 +146,7 @@ def embed_turn_summary(turn: int, factions: list[dict],
     )
 
     for f in factions:
-        submitted = "✅" if f.get("turn_submitted") else "❌ не сдал ход"
+        submitted = "✅" if f.get("free_pop", 0) > 0 else "❌ не сдал ход"
         e.add_field(
             name=f"🏛️ {f['faction_name']}",
             value=(
@@ -190,13 +184,12 @@ def embed_success(message: str) -> discord.Embed:
     )
 
 
-def embed_roll(user: str, dice: int, modifier: int, outcome: str) -> discord.Embed:
+def embed_roll(user: str, dice: int, outcome: str) -> discord.Embed:
     label = OUTCOME_LABELS.get(outcome, outcome)
     color = OUTCOME_COLORS.get(outcome, 0x888888)
-    sign = "+" if modifier >= 0 else ""
     e = discord.Embed(
         title=f"🎲 Бросок — {user}",
-        description=f"`d20 = {dice}`  `{sign}{modifier}`  →  **{dice + modifier}**\n{label}",
+        description=f"`d20 = {dice}`  →  **{dice}**\n{label}",
         color=color
     )
     return e
