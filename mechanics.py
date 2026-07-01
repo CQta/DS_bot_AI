@@ -6,7 +6,7 @@ import math
 import random
 import json
 from typing import Optional
-import database
+
 # ── Dice ─────────────────────────────────────────────────────────────────────
 
 def roll_d20() -> int:
@@ -90,8 +90,10 @@ def calc_unit_efficiency(units: int) -> float:
 
 # ── Resource calculation ──────────────────────────────────────────────────────
 
+
+
 def calc_resource_delta(action_type: str, outcome: str,
-                        units: int, faction: dict) -> dict:
+                        units: int, faction: dict, bonuses: list) -> dict:
     """
     Returns a dict of resource changes based on action type and outcome.
     Multipliers: CRITICAL_SUCCESS=1.5, SUCCESS=1.0, PARTIAL=0.5, FAIL=-0.1
@@ -104,6 +106,9 @@ def calc_resource_delta(action_type: str, outcome: str,
         "FAILURE": 0.0,
         "CRITICAL_FAILURE": -0.1,
     }
+    
+    bonus_modificators = {b["bonus_type"]: b["bonus_value"] for b in bonuses}
+    print(f"Bonuses applied: {bonus_modificators}")
     m = multipliers.get(outcome, 0.5)
     effective_units = max(1, int(units * calc_unit_efficiency(units)))
     base = effective_units * 5  # base yield after diminishing returns
@@ -111,26 +116,25 @@ def calc_resource_delta(action_type: str, outcome: str,
     delta = {}
 
     if action_type == "GATHER":
-        delta["food"] = int(base * m * 1.5)
-        delta["wood"] = int(base * m * 0.5)
+        delta["food"] = int(base * m * 1.5 * bonus_modificators.get("food", 1.0) * bonus_modificators.get("resources", 1.0))
+        delta["wood"] = int(base * m * 0.5 * bonus_modificators.get("wood", 1.0) * bonus_modificators.get("resources", 1.0))
 
     elif action_type == "MINE":
-        delta["fuel"] = int(base * m * 1.2)
-        delta["stone"] = int(base * m * 0.8)
-        delta["metal"] = int(base * m * 0.3)
+        delta["fuel"] = int(base * m * 1.2 * bonus_modificators.get("fuel", 1.0) * bonus_modificators.get("resources", 1.0))
+        delta["stone"] = int(base * m * 0.8 * bonus_modificators.get("stone", 1.0) * bonus_modificators.get("resources", 1.0))
+        delta["metal"] = int(base * m * 0.3 * bonus_modificators.get("metal", 1.0) * bonus_modificators.get("resources", 1.0))
 
     elif action_type == "BUILD":
         # Building costs resources
         delta["wood"] = -int(units * 3)
         delta["stone"] = -int(units * 2)
-        delta["build_progress"] = int(units *  m)
+        delta["build_progress"] = int(units *  m * bonus_modificators.get("work", 1.0))
 
     elif action_type == "RESEARCH":
         # No direct resource gain; handled by tech progress
-        delta["research_progress"] = int(units *  m)
+        delta["research_progress"] = int(units *  m * bonus_modificators.get("research", 1.0))
 
-    elif action_type == "MIRACLE":
-        delta["faith"] = -faction.get("miracle_cost", 20)
+    
 
     # Remove zero values
     return {k: v for k, v in delta.items() if v != 0}
@@ -156,43 +160,51 @@ SEASONS_FOOD_MULT = {
 def calc_consumption(faction: dict, season: str) -> dict:
     """How many resources the faction consumes this turn."""
     pop = faction.get("population", 50)
-    race = faction.get("race", "").lower()
 
     fuel_mult = SEASONS_FUEL_MULT.get(season, 1.0)
     food_mult = SEASONS_FOOD_MULT.get(season, 1.0)
-
-    # Golimory eat coal (fuel = food for them)
-    if "голимор" in race or "golimor" in race:
-        return {
-            "fuel": int(pop * 1.0 * fuel_mult),
-            "food": 0,
-        }
-
-    # Magmatites need no food if near volcano (simplified: always 0)
-    if "магматит" in race or "magmatit" in race:
-        return {
-            "fuel": 0,
-            "food": 0,
-        }
-
-    # Everyone else
+    
     return {
         "food": int(pop * 1.0 * food_mult),
         "fuel": int(pop * 0.3 * fuel_mult),
     }
 
-
-def check_starvation(faction: dict, consumption: dict) -> list[str]:
-    """Returns list of warning strings if resources are critically low."""
+def check_starvation(faction: dict, consumption: dict) -> tuple[list[str], float]:
     warnings = []
+
+    survival_index = 1.0  # 1.0 = идеально, 0 = смерть
+    total_penalty = 0.0
+
     for res, amount in consumption.items():
         current = faction.get(res, 0)
-        if current < amount:
+
+        if amount <= 0:
+            continue
+
+        ratio = current / amount
+
+        if ratio < 1.0:
+            deficit = 1.0 - ratio
+
+            # усиливаем влияние плохих ресурсов
+            total_penalty += deficit
+
             warnings.append(
                 f"⚠️ **{faction['faction_name']}** не хватает `{res}` "
                 f"(нужно {amount}, есть {current})!"
             )
-    return warnings
+        else:
+            # небольшой бонус за избыток (мягкий)
+            surplus = min(ratio - 1.0, 0.5)
+            survival_index += surplus * 0.05
+
+    # применяем общий штраф
+    survival_index -= total_penalty * 0.6
+
+    # ограничиваем диапазон
+    survival_index = max(0.0, min(survival_index, 1.5))
+
+    return warnings, survival_index
 
 
 # ── Weather ──────────────────────────────────────────────────────────────────

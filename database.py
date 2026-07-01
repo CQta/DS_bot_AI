@@ -87,7 +87,8 @@ async def init_db():
             faction_id  INTEGER REFERENCES factions(id),
             bonus_type  TEXT    DEFAULT '{}',
             bonus_value REAL    DEFAULT (unixepoch()),
-            is_active   INTEGER DEFAULT 0
+            is_active   INTEGER DEFAULT 0,
+            duration    INTEGER DEFAULT -1
         );
 
         -- Technologies
@@ -165,14 +166,12 @@ async def update_technology_progress(faction_id: int, tech_id: int, progress_del
         (progress_delta, faction_id, tech_id)
     )
     
-async def create_technology(faction_id: int, name: str, tier: int, research_cost: int, research_progress: int, is_researched: int = 0):
+async def create_technology(faction_id: int, name: str, tier: int, research_cost: int, research_progress: int, is_researched: int = 0, bonus_id: Optional[int] = None):
     await execute(
-        "INSERT INTO technologies (faction_id, name, tier, research_cost, research_progress, is_researched) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (faction_id, name, tier, research_cost, research_progress, is_researched)
+        "INSERT INTO technologies (faction_id, name, tier, research_cost, research_progress, is_researched, bonus_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (faction_id, name, tier, research_cost, research_progress, is_researched, bonus_id)
     )
-
-    
 
 # ── Building helper ──────────────────────────────────────────────────────────
 
@@ -196,11 +195,11 @@ async def update_building_progress(faction_id: int, building_id: int, progress_d
         (progress_delta, faction_id, building_id)
     )
 
-async def create_building(faction_id: int, name: str, tier: int, build_cost: int):
+async def create_building(faction_id: int, name: str, tier: int, build_cost: int, build_progress: int, is_builded: int = 0, bonus_id: Optional[int] = None):
     await execute(
-        "INSERT INTO buildings (faction_id, name, tier, build_cost) "
-        "VALUES (?, ?, ?, ?)",
-        (faction_id, name, tier, build_cost)
+        "INSERT INTO buildings (faction_id, name, tier, build_cost, build_progress, is_builded, bonus_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (faction_id, name, tier, build_cost, build_progress, is_builded, bonus_id)
     )
 async def get_building_by_id(faction_id: int, building_id: int) -> Optional[dict]:
     return await fetch_one(
@@ -215,9 +214,23 @@ async def mark_building_as_built(faction_id: int, building_id: int):
     
 # ── Bonuses helper ──────────────────────────────────────────────────────────
 
-async def get_all_active_bonuses(faction_id: int) -> list[dict]:
+async def create_bonus(faction_id: int, bonus_type: str, bonus_value: float, is_active: int = 0, duration: Optional[int] = -1) -> int:
+    cursor = await execute(
+        "INSERT INTO bonuses (faction_id, bonus_type, bonus_value, is_active, duration) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (faction_id, bonus_type, bonus_value, is_active, duration)
+    )
+    return cursor.lastrowid  # Return the ID of the newly created bonus
+
+async def create_bonus_for_all_fractions(targets: dict[str, float], is_active: int = 1, duration: Optional[int] = 0):  #Позже заменить на вариант лучше, пока сойдет
+    factions = await get_all_factions()
+    for faction in factions:
+        for bonus_type, bonus_value in targets.items():
+            await create_bonus(faction['id'], bonus_type, bonus_value, is_active, duration)
+
+async def get_all_modificators_active_bonuses(faction_id: int) -> list[dict]:
     return await fetch_all(
-        "SELECT * FROM bonuses WHERE faction_id = ? AND is_active = 1",
+        "SELECT bonus_type, bonus_value FROM bonuses WHERE faction_id = ? AND is_active = 1",
         (faction_id,)
     )
     
@@ -228,10 +241,43 @@ async def get_all_unactive_bonuses(faction_id: int) -> list[dict]:
     )
 
 async def activate_bonus(faction_id: int, bonus_id: int):
-    await execute(
-        "UPDATE bonuses SET is_active = 1 WHERE faction_id = ? AND id = ?",
+    # Получаем информацию о бонусе
+    bonus = await fetch_one(
+        """
+        SELECT bonus_type, bonus_value
+        FROM bonuses
+        WHERE faction_id = ? AND id = ?
+        """,
         (faction_id, bonus_id)
     )
+
+    if bonus is None:
+        return False
+
+    bonus_type = bonus["bonus_type"]
+    bonus_value = bonus["bonus_value"]
+
+    # Активируем бонус
+    await execute(
+        """
+        UPDATE bonuses
+        SET is_active = 1
+        WHERE faction_id = ? AND id = ?
+        """,
+        (faction_id, bonus_id)
+    )
+
+    # Если это бонус на жилища
+    if bonus_type == "home":
+        await execute(
+            """
+            UPDATE factions
+            SET pop_cap = pop_cap + ?
+            WHERE id = ?
+            """,
+            (bonus_value, faction_id)
+        )
+
     
 # ── Generic helpers ──────────────────────────────────────────────────────────
 
@@ -253,8 +299,9 @@ async def fetch_all(query: str, params=()) -> list[dict]:
 
 async def execute(query: str, params=()):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(query, params)
+        cursor = await db.execute(query, params)
         await db.commit()
+        return cursor
 
 
 # ── Faction helpers ──────────────────────────────────────────────────────────

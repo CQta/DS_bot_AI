@@ -71,7 +71,7 @@ def embed_status(faction: dict) -> discord.Embed:
 
 def embed_action_result(faction: dict, action: dict, outcome: str,
                         narrative: str, delta: dict,
-                        dice: int) -> discord.Embed:
+                        dice: int, modifier) -> discord.Embed:
     color = OUTCOME_COLORS.get(outcome, 0x888888)
     label = OUTCOME_LABELS.get(outcome, outcome)
 
@@ -80,10 +80,15 @@ def embed_action_result(faction: dict, action: dict, outcome: str,
         description=f"**{action.get('action_type', '?')}:** {action.get('description', '')}",
         color=color
     )
-
+    e.add_field(
+        name="🎲 Бросок",
+        value=f"`d20({dice}) + {modifier} = {dice + modifier}`",
+        inline=True
+    )
+    
     e.add_field(
         name="👥 Юнитов",
-        value=f"`{action.get('units', 0)}`",
+        value=f"`{action.get('units_assigned', 0)}`",
         inline=True
     )
 
@@ -146,7 +151,7 @@ def embed_turn_summary(turn: int, factions: list[dict],
     )
 
     for f in factions:
-        submitted = "✅" if f.get("free_pop", 0) > 0 else "❌ не сдал ход"
+        submitted = "✅" if f.get("free_pop", 0) != f.get("population", 0) else "❌ не сдал ход"
         e.add_field(
             name=f"🏛️ {f['faction_name']}",
             value=(
@@ -160,7 +165,7 @@ def embed_turn_summary(turn: int, factions: list[dict],
 
     if warnings:
         e.add_field(
-            name="⚠️ Предупреждения",
+            name="",
             value="\n".join(warnings),
             inline=False
         )
@@ -189,7 +194,7 @@ def embed_roll(user: str, dice: int, outcome: str) -> discord.Embed:
     color = OUTCOME_COLORS.get(outcome, 0x888888)
     e = discord.Embed(
         title=f"🎲 Бросок — {user}",
-        description=f"`d20 = {dice}`  →  **{dice}**\n{label}",
+        description=f"d20 = {dice}\n{label}",
         color=color
     )
     return e
