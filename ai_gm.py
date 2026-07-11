@@ -241,7 +241,7 @@ def choise_narrative_system(action_type: str) -> str:
 
         
 
-EVENT_SYSTEM = """Ты — Хроникёр мира Пангеи-Примы. Придумай одно глобальное событие для игры.
+EVENT_SYSTEM = """Ты — Хроникёр мира Пангеи-Примы. Придумай одно глобальное событие для игры. До 10 хода старайся балансировать между бафами и дебафами для всех фракций. После 10 хода начинается кризис, и события будут идти только на усложнение.
 Верни ТОЛЬКО JSON:
 {
   "title": "Название события",
@@ -262,6 +262,39 @@ def split_player_text(player_text: str) -> list[str]:
     """Split free-form input into action segments using semicolon as separator."""
     parts = [part.strip() for part in player_text.split(";") if part.strip()]
     return parts if parts else [player_text.strip()]
+
+
+async def parse_actions(player_text: str, faction: dict) -> list[dict]:
+    """Parse free-form player text into a simple list of actions for the game engine."""
+    actions = []
+    for index, segment in enumerate(split_player_text(player_text), start=1):
+        units_match = re.search(r"(\d+)\s*юнит(?:ов)?", segment, flags=re.IGNORECASE)
+        units = int(units_match.group(1)) if units_match else 1
+        lowered = segment.lower()
+
+        if "исслед" in lowered:
+            action_type = "RESEARCH"
+        elif "стро" in lowered or "постр" in lowered:
+            action_type = "BUILD"
+        elif "улуч" in lowered:
+            action_type = "IMPROVE"
+        elif "чуд" in lowered or "мир" in lowered:
+            action_type = "MIRACLE"
+        else:
+            action_type = "OTHER"
+
+        action = {
+            "id": index,
+            "action_type": action_type,
+            "target": "",
+            "is_secret": False,
+            "description": segment,
+            "units": units,
+            "difficulty": 2,
+        }
+        actions.append(enrich_action_with_units(action))
+    return actions
+
 
 async def generate_narrative(faction: dict, action: dict,
                               outcome: str, delta: dict,

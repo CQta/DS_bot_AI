@@ -14,11 +14,11 @@ def roll_d20() -> int:
 
 
 def get_outcome(final_roll: int) -> str:
-    if final_roll <= 5:
+    if final_roll < 5:
         return "FAILURE"
-    elif final_roll <= 10:
+    elif final_roll < 10:
         return "PARTIAL_FAILURE"
-    elif final_roll <= 15:
+    elif final_roll < 15:
         return "PARTIAL_SUCCESS"
     else:
         return "SUCCESS"

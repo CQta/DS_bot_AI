@@ -128,6 +128,30 @@ async def status(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+@bot.tree.command(name="buildings", description="Показать все ваши постройки")
+async def buildings(interaction: discord.Interaction):
+    faction = await db.get_faction(str(interaction.user.id))
+    if not faction:
+        await interaction.response.send_message("❌ У вас еще нет зарегистрированной фракции. Используйте `/register`.", ephemeral=True)
+        return
+
+    buildings_list = await db.get_buildings(faction["id"])
+    embed = embeds.embed_buildings_list(buildings_list)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="researches", description="Показать все ваши научные исследования")
+async def researches(interaction: discord.Interaction):
+    faction = await db.get_faction(str(interaction.user.id))
+    if not faction:
+        await interaction.response.send_message("❌ У вас еще нет зарегистрированной фракции. Используйте `/register`.", ephemeral=True)
+        return
+
+    researches_list = await db.get_technologies(faction["id"])
+    embed = embeds.embed_researches_list(researches_list)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 @bot.tree.command(name="action", description="Отправить действия на текущий ход (свободный текст)")
 @app_commands.describe(units="Сколько юнитов выделенно на задачу",text="Опишите, что делают ваши подданные в этот ход")
 @app_commands.choices(

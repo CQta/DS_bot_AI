@@ -69,6 +69,70 @@ def embed_status(faction: dict) -> discord.Embed:
     return e
 
 
+def embed_buildings_list(buildings: list[dict]) -> discord.Embed:
+    e = discord.Embed(
+        title="🏗️ Постройки",
+        description="Вот все ваши текущие постройки и их состояние.",
+        color=0x2E6DA4
+    )
+    if not buildings:
+        e.description = "У вас пока нет построек."
+        return e
+
+    for building in buildings:
+        status = "✅ Завершено" if building.get("is_builded") else "⏳ В процессе"
+        cost = building.get("build_cost", 0)
+        progress = building.get("build_progress", 0)
+        if cost > 0:
+            progress_text = f"{progress}/{cost} ({round(progress / cost * 100) if cost else 0}%)"
+        else:
+            progress_text = str(progress)
+
+        e.add_field(
+            name=f"🏠 {building.get('name', 'Постройка')}",
+            value=(
+                f"Тир: **{building.get('tier', 1)}**\n"
+                f"Статус: **{status}**\n"
+                f"Прогресс: **{progress_text}**"
+            ),
+            inline=False
+        )
+
+    return e
+
+
+def embed_researches_list(researches: list[dict]) -> discord.Embed:
+    e = discord.Embed(
+        title="🔬 Научные исследования",
+        description="Вот все ваши текущие исследования и их состояние.",
+        color=0x5B2C6F
+    )
+    if not researches:
+        e.description = "У вас пока нет исследований."
+        return e
+
+    for research in researches:
+        status = "✅ Изучено" if research.get("is_researched") else "⏳ В процессе"
+        cost = research.get("research_cost", 0)
+        progress = research.get("research_progress", 0)
+        if cost > 0:
+            progress_text = f"{progress}/{cost} ({round(progress / cost * 100) if cost else 0}%)"
+        else:
+            progress_text = str(progress)
+
+        e.add_field(
+            name=f"🧪 {research.get('name', 'Исследование')}",
+            value=(
+                f"Тир: **{research.get('tier', 1)}**\n"
+                f"Статус: **{status}**\n"
+                f"Прогресс: **{progress_text}**"
+            ),
+            inline=False
+        )
+
+    return e
+
+
 def embed_action_result(faction: dict, action: dict, outcome: str,
                         narrative: str, delta: dict,
                         dice: int, modifier) -> discord.Embed:

@@ -134,17 +134,27 @@ async def init_db():
 
 # ── Technologies helper ──────────────────────────────────────────────────────────
 
+def _normalize_technology_row(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return None
+    normalized = dict(row)
+    if "research_progress" in normalized and "progress" not in normalized:
+        normalized["progress"] = normalized["research_progress"]
+    return normalized
+
+
 async def get_technologies(faction_id: int) -> list[dict]:
-    return await fetch_all(
+    rows = await fetch_all(
         "SELECT * FROM technologies WHERE faction_id = ?",
         (faction_id,)
     )
+    return [_normalize_technology_row(row) for row in rows]
 
 async def get_technology_by_id(faction_id: int, tech_id: int) -> Optional[dict]:
-    return await fetch_one(
+    return _normalize_technology_row(await fetch_one(
         "SELECT * FROM technologies WHERE faction_id = ? AND id = ?",
         (faction_id, tech_id)
-    )
+    ))
     
 async def get_not_researched_technologies(faction_id: int) -> dict[str, int]:
     result = await fetch_all(
@@ -161,12 +171,12 @@ async def mark_technology_as_researched(faction_id: int, tech_id: int):
     
 async def update_technology_progress(faction_id: int, tech_id: int, progress_delta: int):
     await execute(
-        "UPDATE technologies SET progress = progress + ? "
+        "UPDATE technologies SET research_progress = research_progress + ? "
         "WHERE faction_id = ? AND id = ?",
         (progress_delta, faction_id, tech_id)
     )
     
-async def create_technology(faction_id: int, name: str, tier: int, research_cost: int, research_progress: int, is_researched: int = 0, bonus_id: Optional[int] = None):
+async def create_technology(faction_id: int, name: str, tier: int, research_cost: int, research_progress: int = 0, is_researched: int = 0, bonus_id: Optional[int] = None):
     await execute(
         "INSERT INTO technologies (faction_id, name, tier, research_cost, research_progress, is_researched, bonus_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -175,11 +185,21 @@ async def create_technology(faction_id: int, name: str, tier: int, research_cost
 
 # ── Building helper ──────────────────────────────────────────────────────────
 
+def _normalize_building_row(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return None
+    normalized = dict(row)
+    if "build_progress" in normalized and "progress" not in normalized:
+        normalized["progress"] = normalized["build_progress"]
+    return normalized
+
+
 async def get_buildings(faction_id: int) -> list[dict]:
-    return await fetch_all(
+    rows = await fetch_all(
         "SELECT * FROM buildings WHERE faction_id = ?",
         (faction_id,)
     )
+    return [_normalize_building_row(row) for row in rows]
 
 async def get_not_built_buildings(faction_id: int) -> dict[str, int]:
     result = await fetch_all(
@@ -190,22 +210,22 @@ async def get_not_built_buildings(faction_id: int) -> dict[str, int]:
 
 async def update_building_progress(faction_id: int, building_id: int, progress_delta: int):
     await execute(
-        "UPDATE buildings SET progress = progress + ? "
+        "UPDATE buildings SET build_progress = build_progress + ? "
         "WHERE faction_id = ? AND id = ?",
         (progress_delta, faction_id, building_id)
     )
 
-async def create_building(faction_id: int, name: str, tier: int, build_cost: int, build_progress: int, is_builded: int = 0, bonus_id: Optional[int] = None):
+async def create_building(faction_id: int, name: str, tier: int, build_cost: int, build_progress: int = 0, is_builded: int = 0, bonus_id: Optional[int] = None):
     await execute(
         "INSERT INTO buildings (faction_id, name, tier, build_cost, build_progress, is_builded, bonus_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (faction_id, name, tier, build_cost, build_progress, is_builded, bonus_id)
     )
 async def get_building_by_id(faction_id: int, building_id: int) -> Optional[dict]:
-    return await fetch_one(
+    return _normalize_building_row(await fetch_one(
         "SELECT * FROM buildings WHERE faction_id = ? AND id = ?",
         (faction_id, building_id)
-    )
+    ))
 async def mark_building_as_built(faction_id: int, building_id: int):
     await execute(
         "UPDATE buildings SET is_builded = 1 WHERE faction_id = ? AND id = ?",
