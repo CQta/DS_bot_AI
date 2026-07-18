@@ -262,7 +262,7 @@ async def turn_advance(interaction: discord.Interaction):
                 await db.update_building_progress(faction_id, building_id, delta.get("build_progress", 0))
                 updated_building = await db.get_building_by_id(faction_id, building_id)
                 
-                if updated_building and updated_building.get("build_progress", 0) >= updated_building.get("build_cost"):
+                if updated_building and updated_building.get("build_progress", 0) >= updated_building.get("build_progress"):
                     await db.mark_building_as_built(faction_id, building_id)
                     await db.activate_bonus(faction_id, updated_building.get("bonus_id", 0))
                     narrative = f"Мне лень что то придумывать и тратить на вас промпты, поэтому я просто напишу что вы построили здание {res[0]}. Поздравляю!"
@@ -271,7 +271,7 @@ async def turn_advance(interaction: discord.Interaction):
             else:
                 narrative = await ai_gm.generate_narrative(faction, act, outcome, delta, current_season, game["temperature"], dice)
                 if narrative:
-                    if narrative.get("build_cost") == -1:
+                    if narrative.get("build_cost") == -1 or narrative.get("build_cost") == narrative.get("work_cost"):
                         bonus_id = await db.create_bonus(faction_id, narrative.get("target", "None"), narrative.get("modifier", 0), 1)
                         await db.create_building(faction_id, narrative.get("title", "Неизвестная постройка"),
                                                narrative.get("tier", -1),  narrative.get("work_cost", 999), 
@@ -307,7 +307,7 @@ async def turn_advance(interaction: discord.Interaction):
                 narrative = await ai_gm.generate_narrative(faction, act, outcome, delta, current_season, game["temperature"], dice)
                 
                 if narrative:
-                    if narrative.get("science_cost") == -1:
+                    if narrative.get("science_cost") == -1 or narrative.get("science_cost") == narrative.get("research_progress"):
                         bonus_id = await db.create_bonus(faction_id, narrative.get("target", "None"), narrative.get("modifier", 0), 1)
 
                         await db.create_technology(faction_id, narrative.get("title", "Неизвестная технология"),
